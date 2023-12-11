@@ -473,13 +473,18 @@ class DPOTrainer(Trainer):
             The losses tensor contains the DPO loss for each example in the batch.
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
         """
+
         pi_logratios = policy_chosen_logps - policy_rejected_logps
         if reference_free:
             ref_logratios = 0
         else:
             ref_logratios = reference_chosen_logps - reference_rejected_logps
-
-        logits = self.div(pi_logratios) - self.div(ref_logratios)
+        if self.divergence == "standart":
+            logits = pi_logratios - ref_logratios
+        else:
+            chosen_logratios = policy_chosen_logps - reference_chosen_logps
+            rejected_logratios = policy_rejected_logps - reference_rejected_logps
+            logits = self.div(chosen_logratios) - self.div(rejected_logratios)
 
         # The beta is a temperature parameter for the DPO loss, typically something in the range of 0.1 to 0.5.
         # We ignore the reference model as beta -> 0. The label_smoothing parameter encodes our uncertainty about the labels and
