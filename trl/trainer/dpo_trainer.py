@@ -363,15 +363,14 @@ class DPOTrainer(Trainer):
     
     def _alpha_divergence(self, u: torch.FloatTensor):
         if self.alpha == 1:
-            return -torch.log(u)
+            return -1 / torch.exp(u)
         elif self.alpha > 0:
-            return (u ** (1 - self.alpha) - (1 - self.alpha) * u - self.alpha) \
-                / (self.alpha * (self.alpha - 1))
+            return (1 - torch.exp(u) ** (-self.alpha)) / self.alpha
         else:
-            return torch.log(u) * u
+            return u + 1
         
     def _js_divergence(self, u: torch.FloatTensor):
-        return u * torch.log(u) - (torch.log(u) + 1) * torch.log((u + 1) / 2)
+        return torch.log(2 * torch.exp(u) / (1 + torch.exp(u)))
     
     def _get_divergence(self):
         if self.divergence == "standart":
