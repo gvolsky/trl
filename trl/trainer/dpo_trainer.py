@@ -64,6 +64,10 @@ class DPOTrainer(Trainer):
             reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
         beta (`float`, defaults to 0.1):
             The beta factor in DPO loss. Higher beta means less divergence from the initial policy. For the IPO loss, beta is the regularization parameter denoted by tau in the paper.
+        alpha (`float`, defaults is 0):
+            For another divergence type from [BEYOND REVERSE KL](https://arxiv.org/pdf/2309.16240v1.pdf) paper.
+        divergence (`str`, defaults to `"standart"`)
+            Type of divergence from [BEYOND REVERSE KL](https://arxiv.org/pdf/2309.16240v1.pdf) paper. Either `"standart"` for standart sigmoid loss, either `"alpha"` for using alpha-divergence from paper, either `"js"` for using JS-divergence from paper.
         label_smoothing (`float`, defaults to 0):
             The robust DPO label smoothing parameter from the [cDPO](https://ericmitchell.ai/cdpo.pdf) report that should be between 0 and 0.5.
         loss_type (`str`, defaults to `"sigmoid"`):
@@ -122,6 +126,8 @@ class DPOTrainer(Trainer):
         model: Union[PreTrainedModel, nn.Module, str] = None,
         ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         beta: float = 0.1,
+        alpha: float = 0,
+        divergence: Literal["standart", "alpha", "js"] = "standart",
         label_smoothing: float = 0,
         loss_type: Literal["sigmoid", "hinge", "ipo", "kto"] = "sigmoid",
         args: TrainingArguments = None,
@@ -317,6 +323,9 @@ class DPOTrainer(Trainer):
             )
 
         self.beta = beta
+        self.alpha = alpha
+        self.divergence = divergence
+        self.div = self._get_divergence()
         self.label_smoothing = label_smoothing
         self.loss_type = loss_type
 
@@ -351,6 +360,27 @@ class DPOTrainer(Trainer):
                 self.ref_model = self._prepare_deepspeed(self.ref_model)
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+    
+    def _alpha_divergence(self, u: torch.FloatTensor):
+        if self.alpha == 1:
+            return -u
+        elif self.alpha > 0:
+            return (torch.exp(u) ** (1 - self.alpha) - (1 - self.alpha) * torch.exp(u) - self.alpha) \
+                / (self.alpha * (self.alpha - 1))
+        else:
+            return torch.exp(u) * u
+        
+    def _js_divergence(self, u: torch.FloatTensor):
+        return torch.exp(u) * u - (u + 1) * torch.log((torch.exp(u) + 1) / 2)
+    
+    def _get_divergence(self):
+        if self.divergence == "standart":
+            return nn.Identity()
+        elif self.divergence == "js":
+            return self._js_divergence, 
+        elif self.divergence == "alpha":
+            return self._alpha_divergence
+        return None
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
@@ -450,7 +480,7 @@ class DPOTrainer(Trainer):
         else:
             ref_logratios = reference_chosen_logps - reference_rejected_logps
 
-        logits = pi_logratios - ref_logratios
+        logits = self.div(pi_logratios) - self.div(ref_logratios)
 
         # The beta is a temperature parameter for the DPO loss, typically something in the range of 0.1 to 0.5.
         # We ignore the reference model as beta -> 0. The label_smoothing parameter encodes our uncertainty about the labels and
